@@ -1,88 +1,85 @@
 #include "Robot.h"
 
-// Robot.cpp is our main entrypoint
-
-using hand = frc::XboxController::JoystickHand;
+using namespace frc;
+using namespace wml;
 
 double lastTimestamp;
-
-// Variables to store our wanted speed for each side
-double leftSpeed;
-double rightSpeed;
-
-double dt; //dt stands for delta time
+double dt;
 
 void Robot::RobotInit() {
+  // Get's last time stamp, used to calculate dt
+  lastTimestamp = Timer::GetFPGATimestamp();
 
-  dt = frc::Timer::GetFPGATimestamp() - lastTimestamp;
-  lastTimestamp = frc::Timer::GetFPGATimestamp();
-  // use the provided timers to calculate the time since the last cycle was run
+  // Initializes The smart controllers assigned in robotmap
+  ControlMap::InitSmartControllerGroup(robotMap.contGroup);
 
-  // controllers
-  xbox = new frc::XboxController(0);
-  
-  // Drivebase
-  leftMotor[0] = new frc::Spark(0);
-  rightMotor[0] = new frc::Spark(1);
+  auto cameraFront = CameraServer::GetInstance()->StartAutomaticCapture(0);
+  auto cameraBack = CameraServer::GetInstance()->StartAutomaticCapture(1);
 
-  leftMotor[0]->SetInverted(true);
-  rightMotor[0]->SetInverted(false);
+  cameraFront.SetFPS(30);
+  cameraBack.SetFPS(30);
+
+  cameraFront.SetResolution(160, 120);
+  cameraBack.SetResolution(160, 120);
+
+  // Initializers
+  drivetrain = new Drivetrain(robotMap.driveSystem.driveTrainConfig, robotMap.driveSystem.gainsVelocity);
+  turret = new Turret(robotMap.turret.turretRotation, robotMap.turret.turretAngle, robotMap.turret.turretFlyWheel, robotMap.contGroup);
+  magLoader = new MagLoader(robotMap.magLoader.magLoaderMotor, robotMap.contGroup);
+  beltIntake = new BeltIntake(robotMap.intake.intakeMotor, robotMap.contGroup);
+  climber = new Climber(robotMap.climber.ClimberActuator, robotMap.contGroup);
 
 
-  // Hammer
-  hammer[0] = new frc::Spark(2);
+  // Strategy controllers
+  drivetrain->SetDefault(std::make_shared<DrivetrainManual>("Drivetrain Manual", *drivetrain, robotMap.contGroup));
+  drivetrain->StartLoop(100);
 
+  // Inverts one side of our drivetrain
+  drivetrain->GetConfig().leftDrive.transmission->SetInverted(true);
+  drivetrain->GetConfig().rightDrive.transmission->SetInverted(false);
+
+  // Registering our systems to be called via strategy
+  StrategyController::Register(drivetrain);
+  NTProvider::Register(drivetrain); // Registers system to networktables
 }
 
 void Robot::RobotPeriodic() {
-  if (pressureSensor.GetScaled() < 80) {                            // If the pressure drops below 80 psi...
-    compressor.SetTarget(wml::actuators::BinaryActuatorState::kForward); // ... turn the compressor on.
-  }
+  dt = Timer::GetFPGATimestamp() - lastTimestamp;
+
+  StrategyController::Update(dt);
+  NTProvider::Update();
 }
 
 void Robot::DisabledInit() {
   InterruptAll(true);
 }
 
-void Robot::AutonomousInit() {}
-void Robot::AutonomousPeriodic() {}
+void Robot::AutonomousInit() {
+  Schedule(std::make_shared<DrivetrainAuto>(*drivetrain, wml::control::PIDGains{ "I am gains", 1, 0, 0 }));
+}
+void Robot::AutonomousPeriodic() {
+  turret->AutoOnUpdate(dt);
+  magLoader->AutoOnUpdate(dt);
+  beltIntake->AutoOnUpdate(dt);
+  climber->AutoOnUpdate(dt);
+}
 
-void Robot::TeleopInit() {}
+void Robot::TeleopInit() { 
+  Schedule(drivetrain->GetDefaultStrategy(), true);
+}
 void Robot::TeleopPeriodic() {
+  turret->TeleopOnUpdate(dt);
+  magLoader->TeleopOnUpdate(dt);
+  beltIntake->TeleopOnUpdate(dt);
+  climber->TeleopOnUpdate(dt);
+}
 
-
-  // Drivebase
-  leftSpeed = xbox->GetY(hand::kLeftHand);
-  leftSpeed = xbox->GetY(hand::kRightHand);
-
-  leftMotor[0]->Set(leftSpeed);
-  rightMotor[0]->Set(rightSpeed);
-
-  // Hammer
-  if (xbox->GetAButton()) {
-    hammer[0]->Set(0.5);
-  } else if (xbox->GetBButton()) {
-    hammer[0]->Set(-0.5);
-  } else {
-    hammer[0]->Set(0);
-  }
-
-  // Pneumatics
-  if (xbox->GetXButton()) {
-    solenoid.SetTarget(wml::actuators::BinaryActuatorState::kForward);
-  } else {
-    solenoid.SetTarget(wml::actuators::BinaryActuatorState::kReverse); // if reverse doesn't work use forward. Might be toggle
-  }
-
-  // The update methods need to be called every cycle for the actuators to actualy do anything
-  compressor.Update(dt);
-  solenoid.Update(dt);
-
-  // Stop the solenoid if it's finished
-  if (solenoid.IsDone()) solenoid.Stop();
-
-  NTProvider::Update();     // Updates values sent to NetworkTables
-} 
-
-void Robot::TestInit() {}
-void Robot::TestPeriodic() {}
+void Robot::TestInit() {
+  Schedule(std::make_shared<DrivetrainTest>(*drivetrain, wml::control::PIDGains{ "I am gains 2: Elecis Boogaloo", 1, 0, 0 }));
+}
+void Robot::TestPeriodic() {
+  turret->TestOnUpdate(dt);
+  magLoader->TestOnUpdate(dt);
+  beltIntake->TestOnUpdate(dt);
+  climber->TestOnUpdate(dt);
+}
