@@ -3,12 +3,11 @@
 using namespace frc;
 using namespace wml;
 
+double CurrentTime;
 double lastTimestamp;
 double dt;
 
 void Robot::RobotInit() {
-  // Get's last time stamp, used to calculate dt
-  lastTimestamp = Timer::GetFPGATimestamp();
 
   // Initializes The smart controllers assigned in robotmap
   ControlMap::InitSmartControllerGroup(robotMap.contGroup);
@@ -24,19 +23,30 @@ void Robot::RobotInit() {
 
   // Initializers
   drivetrain = new Drivetrain(robotMap.driveSystem.driveTrainConfig, robotMap.driveSystem.gainsVelocity);
-  turret = new Turret(robotMap.turret.turretRotation, robotMap.turret.turretAngle, robotMap.turret.turretFlyWheel, robotMap.contGroup);
-  magLoader = new MagLoader(robotMap.magLoader.magLoaderMotor, robotMap.contGroup);
-  beltIntake = new BeltIntake(robotMap.intake.intakeMotor, robotMap.contGroup);
-  climber = new Climber(robotMap.climber.ClimberActuator, robotMap.contGroup);
+  //robotMap.intake.IntakeDown,
+  turret = new Turret(robotMap.turret.turretRotation, robotMap.turret.turretAngle, robotMap.turret.turretFlyWheel, robotMap.turret.LeftLimit, robotMap.turret.RightLimit, robotMap.turret.AngleDownLimit, robotMap.contGroup, robotMap.controlSystem.visionTable);
+  magLoader = new MagLoader(robotMap.magLoader.magLoaderMotor, robotMap.magLoader.StartMagLimit,robotMap.magLoader.Position1Limit, robotMap.magLoader.Position5Limit, robotMap.contGroup);
+  beltIntake = new BeltIntake(robotMap.intake.intakeMotor, robotMap.intake.IntakeDown, robotMap.contGroup, robotMap.controlSystem.BeltIntakeTable);
+  climber = new Climber(robotMap.climber.ClimberActuator, robotMap.climber.ClimberElevator, robotMap.contGroup);
+  controlPannel = new ControlPannel(robotMap.climber.ClimberActuator, robotMap.controlPannel.ControlPannelMotor, robotMap.controlPannel.ExtendControlPannelMotor, robotMap.contGroup, robotMap.controlSystem.ControlPannelTable);
 
+  // Zero All Encoders
+  robotMap.driveSystem.drivetrain.GetConfig().leftDrive.encoder->ZeroEncoder();
+  robotMap.driveSystem.drivetrain.GetConfig().rightDrive.encoder->ZeroEncoder();
 
   // Strategy controllers
-  drivetrain->SetDefault(std::make_shared<DrivetrainManual>("Drivetrain Manual", *drivetrain, robotMap.contGroup));
+  drivetrain->SetDefault(std::make_shared<DrivetrainManual>("Drivetrain Manual", *drivetrain, robotMap.driveSystem.ChangeGearing, robotMap.driveSystem.Shift2PTO, robotMap.contGroup));
   drivetrain->StartLoop(100);
 
   // Inverts one side of our drivetrain
-  drivetrain->GetConfig().leftDrive.transmission->SetInverted(true);
-  drivetrain->GetConfig().rightDrive.transmission->SetInverted(false);
+  drivetrain->GetConfig().rightDrive.transmission->SetInverted(true);
+  drivetrain->GetConfig().leftDrive.transmission->SetInverted(false);
+
+  robotMap.turret.rotationMotors.SetInverted(true);
+
+  // Arduino Controller
+  robotMap.controlSystem.arduino.WriteBulk(&robotMap.controlSystem.message, 16);
+  robotMap.controlSystem.message = 78;
 
   // Registering our systems to be called via strategy
   StrategyController::Register(drivetrain);
@@ -44,10 +54,15 @@ void Robot::RobotInit() {
 }
 
 void Robot::RobotPeriodic() {
-  dt = Timer::GetFPGATimestamp() - lastTimestamp;
+  CurrentTime = frc::Timer::GetFPGATimestamp();
+  dt = CurrentTime - lastTimestamp;
 
+  robotMap.controlSystem.compressor.SetTarget(wml::actuators::BinaryActuatorState::kForward);
+  robotMap.controlSystem.compressor.Update(dt);
   StrategyController::Update(dt);
   NTProvider::Update();
+
+  lastTimestamp = CurrentTime;
 }
 
 void Robot::DisabledInit() {
@@ -55,7 +70,21 @@ void Robot::DisabledInit() {
 }
 
 void Robot::AutonomousInit() {
-  Schedule(std::make_shared<DrivetrainAuto>(*drivetrain, wml::control::PIDGains{ "I am gains", 1, 0, 0 }));
+  Schedule(std::make_shared<DrivetrainAuto>(*drivetrain, 
+                                             wml::control::PIDGains{ "I am gains", 1, 0, 0 }, 
+                                             robotMap.autonomous.AutoSelecter, 
+                                             robotMap.autonomous.StartDoComplete,
+                                             robotMap.autonomous.StartPointComplete, 
+                                             robotMap.autonomous.WayPoint1Complete, 
+                                             robotMap.autonomous.WayPoint2Complete, 
+                                             robotMap.autonomous.WayPoint3Complete, 
+                                             robotMap.autonomous.EndComplete));
+
+  // Zero Robot For Autonomous
+  // turret->ZeroTurret();
+  robotMap.driveSystem.drivetrain.GetConfig().leftDrive.encoder->ZeroEncoder();
+  robotMap.driveSystem.drivetrain.GetConfig().rightDrive.encoder->ZeroEncoder();
+  robotMap.driveSystem.drivetrain.GetConfig().gyro->Reset();
 }
 void Robot::AutonomousPeriodic() {
   turret->AutoOnUpdate(dt);
@@ -66,6 +95,7 @@ void Robot::AutonomousPeriodic() {
 
 void Robot::TeleopInit() { 
   Schedule(drivetrain->GetDefaultStrategy(), true);
+  // turret->ZeroTurret();
 }
 void Robot::TeleopPeriodic() {
   turret->TeleopOnUpdate(dt);
@@ -75,7 +105,7 @@ void Robot::TeleopPeriodic() {
 }
 
 void Robot::TestInit() {
-  Schedule(std::make_shared<DrivetrainTest>(*drivetrain, wml::control::PIDGains{ "I am gains 2: Elecis Boogaloo", 1, 0, 0 }));
+  Schedule(std::make_shared<DrivetrainTest>(*drivetrain, wml::control::PIDGains{ "I am gains 2: Electric Boogaloo", 1, 0, 0 }));
 }
 void Robot::TestPeriodic() {
   turret->TestOnUpdate(dt);
